@@ -1,0 +1,10 @@
+LFW_aligned/
+feret_png/
+feret_faces_png/
+facenet128.tflite
+facenet512.tflite
+embeddings128_3*/
+embeddings512_3*/
+embeddings128_4*/
+embeddings512_4*/
+*feret*/
