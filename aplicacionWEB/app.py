@@ -3,7 +3,7 @@ import numpy as np
 import plotly.express as px
 import plotly.io as pio
 import json
-from err_calc import compute_err
+from err_calc import compute_err, compute_hamming_histogram
 
 app = Flask(__name__)
 
@@ -45,7 +45,7 @@ def compute_graph(params: dict):
     return json.loads(pio.to_json(fig))
 
 
-@app.route("/api/plot", methods=["POST"])
+@app.route("/api/err", methods=["POST"])
 def api_err():
     params = request.json
     model = int(params['model'])        # p.ej. 512
@@ -65,6 +65,21 @@ def api_err():
         save_plot=True,
         output_dir="static/plots"
     )
+    return jsonify(res)
+
+@app.route('/api/histogram', methods=['POST'])
+def api_histogram():
+    params = request.json
+    model = int(params['model'])
+    bits  = int(params['bits'])
+    if bits == 3:
+        t1 = float(params['t1'])
+        t2 = None
+    else:
+        t1 = float(params['t2'])
+        t2 = float(params['t3'])
+    dataset_dir = f"../embeddings{model}_float_LFW"
+    res = compute_hamming_histogram(dataset_dir, model, bits, t1=t1, t2=t2)
     return jsonify(res)
 
 

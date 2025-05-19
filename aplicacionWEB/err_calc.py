@@ -249,3 +249,37 @@ def compute_err(
         "plot": plot_dict,
         **({"plot_path": plot_path} if plot_path else {}),
     }
+
+def compute_hamming_histogram(
+    dataset_dir: str,
+    float_dim: int,
+    bits: int,
+    *,
+    t1: float | None = None,
+    t2: float | None = None,
+) -> dict:
+    """
+    Calcula el histograma del peso Hamming de la primera muestra
+    de cada individuo tras binarizar.
+
+    Devuelve un dict JSON-serializable con:
+      - weights: lista de pesos individuales
+      - hist: figura Plotly (fig.to_dict())
+    """
+    # 1) Cargar y binarizar
+    data_f = load_float_embeddings(dataset_dir, float_dim)
+    data_b = binarize_all(data_f, bits, t1=t1, t2=t2)
+
+    # 2) Extraer peso Hamming de la primera muestra de cada individuo
+    weights = [int(arr[0].sum()) for arr in data_b.values()]
+
+    # 3) Crear histograma con Plotly
+    hist_trace = go.Histogram(x=weights, nbinsx=max(weights) + 1)
+    layout = go.Layout(
+        title="Histograma de peso Hamming (primera muestra)",
+        xaxis=dict(title="Peso Hamming"),
+        yaxis=dict(title="Número de individuos")
+    )
+    fig = go.Figure(data=[hist_trace], layout=layout)
+
+    return {"weights": weights, "plot": fig.to_dict()}
