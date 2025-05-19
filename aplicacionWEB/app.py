@@ -3,6 +3,7 @@ import numpy as np
 import plotly.express as px
 import plotly.io as pio
 import json
+from err_calc import compute_err
 
 app = Flask(__name__)
 
@@ -45,12 +46,27 @@ def compute_graph(params: dict):
 
 
 @app.route("/api/plot", methods=["POST"])
-def api_plot():
-    params = request.json or {}
-    print(f'Parametros recibidos: {params}')
-    fig_json = compute_graph(params)
-    print(f'gráfica devuelta {fig_json}')
-    return jsonify(fig_json)
+def api_err():
+    params = request.json
+    model = int(params['model'])        # p.ej. 512
+    bits  = int(params['bits'])         # 3 o 4
+    # mapear umbrales:
+    if bits == 3:
+        t1 = float(params['t1'])
+        t2 = None
+    else:
+        # aquí asumimos params['t2']=lower, params['t3']=upper
+        t1 = float(params['t2'])
+        t2 = float(params['t3'])
+    dataset_dir = f"../embeddings{model}_float_LFW"
+    res = compute_err(
+        dataset_dir, model, bits,
+        t1=t1, t2=t2,
+        save_plot=True,
+        output_dir="static/plots"
+    )
+    return jsonify(res)
+
 
 @app.route("/")
 def index():
