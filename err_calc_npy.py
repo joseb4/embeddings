@@ -5,6 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from tqdm import tqdm
+import plotly.graph_objects as go
+import ipywidgets as widgets
+from IPython.display import display, clear_output
 
 # --------------------------------
 # 🔧 VARIABLES CONFIGURABLES
@@ -51,6 +54,101 @@ def cargar_embeddings(dataset_dir, embedding_length):
 
     return data
 
+
+def load_float_embeddings(dataset_dir: str,
+                          float_dim: int) -> dict[str, np.ndarray]:
+    """
+    Carga los embeddings en punto flotante desde dataset_dir
+    y devuelve un dict {nombre: array} donde el array tiene
+    dimensión (num_samples, float_dim).
+    """
+    if not os.path.exists(dataset_dir):
+        raise FileNotFoundError(f"Directorio no encontrado: {dataset_dir}")
+    if not os.path.isdir(dataset_dir):
+        raise ValueError(f"Se esperaba un directorio: {dataset_dir}")
+    if not os.access(dataset_dir, os.R_OK):
+        raise PermissionError(f"Acceso denegado: {dataset_dir}")
+    if float_dim <= 0:
+        raise ValueError(f"Dimensión inválida: {float_dim}")
+    if not os.listdir(dataset_dir):
+        raise ValueError(f"Directorio vacío: {dataset_dir}")
+    # Cargar los embeddings
+    # y filtrar por dimensión
+    data = {}
+    for fn in os.listdir(dataset_dir):
+        if not fn.endswith(".npy"):
+            continue
+        arr = np.load(os.path.join(dataset_dir, fn))
+        if arr.ndim == 2 and arr.shape[1] == float_dim:
+            data[fn] = arr
+    return data
+
+def _binarize_3bits(embedding, th):
+    emb_binario = []
+    for emb in embedding:
+        if emb <= -th:
+            emb_binario.extend([0, 0, 0])
+        elif -th < emb <= 0:
+            emb_binario.extend([0, 0, 1])
+        elif 0 < emb <= th:
+            emb_binario.extend([0, 1, 1])
+        else:
+            emb_binario.extend([1, 1, 1])
+    return np.array(emb_binario, dtype=np.uint8)
+
+
+def _binarize_4bits(embedding, th1, th2):
+    emb_binario = []
+    for emb in embedding:
+        if emb <= -th1:
+            emb_binario.extend([0, 0, 0, 0])
+        elif -th1 < emb <= -th2:
+            emb_binario.extend([0, 0, 0, 1])
+        elif -th2 < emb <= th2:
+            emb_binario.extend([0, 0, 1, 1])
+        elif th2 < emb <= th1:
+            emb_binario.extend([0, 1, 1, 1])
+        else:
+            emb_binario.extend([1, 1, 1, 1])
+    return np.array(emb_binario, dtype=np.uint8)
+
+def binarize_all(data_f: dict[str, np.ndarray],
+                 bits: int,
+                 t1: float=None,
+                 t2: float=None) -> dict[str, np.ndarray]:
+    """
+    Binariza todos los embeddings en data_f y devuelve un dict
+    {nombre: array} donde el array tiene dimensión (num_samples, bits*dim).
+    bits: 3 o 4 (número de bits por componente tras binarizar).
+    t1, t2: umbrales de binarización:
+      · bits==3 ➜ t1 (único umbral)
+      · bits==4 ➜ t1=umbral bajo, t2=umbral alto
+    """
+    if bits not in (3, 4):
+        raise ValueError(f"bits debe ser 3 o 4, no {bits}")
+    if bits == 3 and t1 is None:
+        raise ValueError("Para 3 bits necesitas t1")
+    if bits == 4 and (t1 is None or t2 is None):
+        raise ValueError("Para 4 bits necesitas t1 (umbral bajo) y t2 (umbral alto)")
+    # Binarizar
+    out = {}
+    for name, mat in data_f.items():
+        bins = []
+        for emb in mat:
+            if bits == 3:
+                if t1 is None:
+                    raise ValueError("Para 3 bits necesitas t1")
+                bins.append(_binarize_3bits(emb, t1))
+            else:
+                if t1 is None or t2 is None:
+                    raise ValueError("Para 4 bits necesitas t2 (umbral bajo) y t3 (umbral alto)")
+                # aquí mapeamos t1→th_low, t2→th_high
+                bins.append(_binarize_4bits(emb, t1, t2))
+        out[name] = np.stack(bins, axis=0)
+    return out
+
+
+
 # --------------------------------
 # 🔍 FUNCIÓN PARA GENERAR PARES GENUINOS E IMPOSTORES
 # --------------------------------
@@ -71,7 +169,7 @@ def generar_pares(data):
     print(f"Personas seleccionadas para pares genuinos: {len(personas_muestreadas)}")
 
     # Generar pares genuinos
-    for persona in tqdm(personas_muestreadas, desc="Generando pares genuinos"):
+    for persona in tqdm(personas_validas, desc="Generando pares genuinos"):
         muestras = data[persona]  # shape (N, EMBEDDING_LENGTH)
         # Combinamos índices para formar pares entre todas las muestras
         indices = list(range(muestras.shape[0]))
@@ -150,30 +248,92 @@ def encontrar_eer(umbrales, fars, frrs):
 # --------------------------------
 # 📈 GRAFICAR RESULTADOS
 # --------------------------------
-def graficar(umbrales, fars, frrs, show=True):
-    """
-    Genera la gráfica de FAR vs FRR y muestra el punto EER.
-    """
-    # Calculamos el EER y el umbral en el que ocurre
+
+def graficar_interactivo(umbrales, fars, frrs, show=True):
+    # Calcula el EER y el umbral en el que ocurre
     eer_threshold, eer = encontrar_eer(umbrales, fars, frrs)
     print(f"\n🔍 EER encontrado en umbral = {eer_threshold} con tasa (EER) ≈ {eer:.2f}%")
 
-    # Gráfica
-    plt.plot(umbrales, fars, label="FAR (False Acceptance Rate)")
-    plt.plot(umbrales, frrs, label="FRR (False Rejection Rate)")
+    fig = go.Figure()
 
-    # Punto del EER
-    plt.axvline(x=eer_threshold, color='gray', linestyle='--', label=f"Umbral EER = {eer_threshold}")
-    plt.scatter([eer_threshold], [eer], color='red', zorder=5)
-    plt.text(eer_threshold + 1, eer + 1, f"EER ≈ {eer:.2f}%", color='red')
+    # FAR curve
+    fig.add_trace(go.Scatter(x=umbrales, y=fars, mode='lines', name='FAR (False Acceptance Rate)'))
+    # FRR curve
+    fig.add_trace(go.Scatter(x=umbrales, y=frrs, mode='lines', name='FRR (False Rejection Rate)'))
+    # EER vertical line
+    fig.add_shape(
+        type="line",
+        x0=eer_threshold, x1=eer_threshold,
+        y0=0, y1=eer,
+        line=dict(color="gray", dash="dash"),
+        name="Umbral EER"
+    )
+    # EER point
+    fig.add_trace(go.Scatter(
+        x=[eer_threshold], y=[eer],
+        mode='markers+text',
+        marker=dict(color='red', size=10),
+        text=[f"EER ≈ {eer:.2f}%"],
+        textposition="top right",
+        name="EER"
+    ))
 
-    plt.xlabel("Umbral de Hamming")
-    plt.ylabel("Tasa (%)")
-    plt.title("Curva FAR vs FRR con Punto EER")
-    plt.grid(True)
-    plt.legend()
+    fig.update_layout(
+        title="Curva FAR vs FRR con Punto EER",
+        xaxis_title="Umbral de Hamming",
+        yaxis_title="Tasa (%)",
+        legend=dict(x=0.01, y=0.99),
+        template="plotly_white"
+    )
+
     if show:
-        plt.show()
+        fig.show()
+
+def compute_err(
+    data_b: dict[str, np.ndarray],
+):
+    """
+    Calcula FAR, FRR y EER sobre embeddings binarizados y muestra la gráfica.
+    """
+    # 1) Cargar y binarizar
+    # data_f = load_float_embeddings(dataset_dir, float_dim)
+    # data_b = binarize_all(data_f, bits, t1=t1, t2=t2)
+
+    # 2) Generar pares y distancias
+    genuinos, impostores = generar_pares(data_b)
+    dist_g = calcular_distancias(genuinos)
+    dist_i = calcular_distancias(impostores)
+
+    # 3) FAR / FRR / EER
+    bin_length = next(iter(data_b.values())).shape[1]
+    thresholds = list(range(0, bin_length + 1))
+    fars, frrs = evaluar_umbral(dist_g, dist_i, thresholds)
+    eer_th, eer_val = encontrar_eer(thresholds, fars, frrs)
+
+    # 4) Gráfica Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=thresholds, y=fars, name="FAR", mode="lines"))
+    fig.add_trace(go.Scatter(x=thresholds, y=frrs, name="FRR", mode="lines"))
+    fig.add_trace(go.Scatter(
+        x=[eer_th], y=[eer_val],
+        name="EER", mode="markers+text",
+        text=[f"{eer_val:.2f}%"], textposition="top right"
+    ))
+    fig.add_shape(
+        type="line",
+        x0=eer_th, x1=eer_th,
+        y0=0, y1=max(max(fars), max(frrs)),
+        line=dict(dash="dash"),
+    )
+    fig.update_layout(
+        title="FAR vs FRR con EER",
+        xaxis_title="Umbral de Hamming",
+        yaxis_title="Tasa (%)",
+        legend=dict(x=0.01, y=0.99),
+        template="plotly_white"
+    )
+    print(f"\n🔍 EER encontrado en umbral = {eer_th} con tasa (EER) ≈ {eer_val:.2f}%")
+    fig.show()
 
 # --------------------------------
 # 🚀 MAIN

@@ -11,6 +11,10 @@ import plotly.graph_objects as go
 import numpy as np, json, plotly.io as pio
 
 def compute_graph(params: dict):
+    """
+    Calcula la intersección de dos rectas y devuelve un JSON
+    con la figura de Plotly.
+    """
     # ① Lee las opciones del usuario (usa defaults si faltan)
     m1 = float(params.get("m1", 1))
     b1 = float(params.get("b1", 0))
@@ -47,6 +51,10 @@ def compute_graph(params: dict):
 
 @app.route("/api/err", methods=["POST"])
 def api_err():
+    """
+    Calcula el error de un modelo de reconocimiento facial
+    y devuelve un JSON con la figura de Plotly.
+    """
     params = request.json
     model = int(params['model'])        # p.ej. 512
     bits  = int(params['bits'])         # 3 o 4
@@ -69,6 +77,10 @@ def api_err():
 
 @app.route('/api/histogram', methods=['POST'])
 def api_histogram():
+    """
+    Calcula el histograma de Hamming de un modelo de reconocimiento facial  
+    y devuelve un JSON con la figura de Plotly.
+    """
     params = request.json
     model = int(params['model'])
     bits  = int(params['bits'])
@@ -85,6 +97,9 @@ def api_histogram():
 
 @app.route("/")
 def index():
+    """
+    Página principal de la aplicación.
+    """
     return render_template("index.html")   # formulario + contenedor de la gráfica
 
 if __name__ == "__main__":

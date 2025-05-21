@@ -10,7 +10,14 @@ import plotly.graph_objs as go
 # 🔧 Helpers de binarización
 # --------------------------------------------------
 def _binarize_3bits(emb: np.ndarray, th: float) -> np.ndarray:
-    out = []
+    """
+    Binariza un embedding de 3 bits:
+      - 0: < -th
+      - 1: -th < v <= 0
+      - 2: 0 < v <= th
+      - 3: v > th
+    Devuelve un array de 3 bits (0-1) por cada componente.
+    """
     for v in emb:
         if v <= -th:
             out.extend([0,0,0])
@@ -23,6 +30,14 @@ def _binarize_3bits(emb: np.ndarray, th: float) -> np.ndarray:
     return np.array(out, dtype=np.uint8)
 
 def _binarize_4bits(emb: np.ndarray, th_low: float, th_high: float) -> np.ndarray:
+    """
+    Binariza un embedding de 4 bits:
+      - 0: < -th_high
+      - 1: -th_high < v <= -th_low
+      - 2: -th_low < v <= th_low
+      - 3: th_low < v <= th_high
+      - 4: v > th_high
+    Devuelve un array de 4 bits (0-1) por cada componente."""
     out = []
     for v in emb:
         if v <= -th_high:
@@ -42,7 +57,23 @@ def _binarize_4bits(emb: np.ndarray, th_low: float, th_high: float) -> np.ndarra
 # --------------------------------------------------
 def load_float_embeddings(dataset_dir: str,
                           float_dim: int) -> dict[str, np.ndarray]:
-    """Carga todos los .npy de `dataset_dir` con dimensión float_dim."""
+    """
+    Carga los embeddings en punto flotante desde dataset_dir
+    y devuelve un dict {nombre: array} donde el array tiene
+    dimensión (num_samples, float_dim).
+    """
+    if not os.path.exists(dataset_dir):
+        raise FileNotFoundError(f"Directorio no encontrado: {dataset_dir}")
+    if not os.path.isdir(dataset_dir):
+        raise ValueError(f"Se esperaba un directorio: {dataset_dir}")
+    if not os.access(dataset_dir, os.R_OK):
+        raise PermissionError(f"Acceso denegado: {dataset_dir}")
+    if float_dim <= 0:
+        raise ValueError(f"Dimensión inválida: {float_dim}")
+    if not os.listdir(dataset_dir):
+        raise ValueError(f"Directorio vacío: {dataset_dir}")
+    # Cargar los embeddings
+    # y filtrar por dimensión
     data = {}
     for fn in os.listdir(dataset_dir):
         if not fn.endswith(".npy"):
@@ -57,10 +88,20 @@ def binarize_all(data_f: dict[str, np.ndarray],
                  t1: float=None,
                  t2: float=None) -> dict[str, np.ndarray]:
     """
-    Binariza todos los embeddings según bits=3|4.
-      - bits=3: usa t1
-      - bits=4: usa t1 (lower) y t2 (higher)
+    Binariza todos los embeddings en data_f y devuelve un dict
+    {nombre: array} donde el array tiene dimensión (num_samples, bits*dim).
+    bits: 3 o 4 (número de bits por componente tras binarizar).
+    t1, t2: umbrales de binarización:
+      · bits==3 ➜ t1 (único umbral)
+      · bits==4 ➜ t1=umbral bajo, t2=umbral alto
     """
+    if bits not in (3, 4):
+        raise ValueError(f"bits debe ser 3 o 4, no {bits}")
+    if bits == 3 and t1 is None:
+        raise ValueError("Para 3 bits necesitas t1")
+    if bits == 4 and (t1 is None or t2 is None):
+        raise ValueError("Para 4 bits necesitas t1 (umbral bajo) y t2 (umbral alto)")
+    # Binarizar
     out = {}
     for name, mat in data_f.items():
         bins = []
@@ -81,12 +122,32 @@ def binarize_all(data_f: dict[str, np.ndarray],
 # ⚙️ Generación de pares y distancia
 # --------------------------------------------------
 def _hamming(a: np.ndarray, b: np.ndarray) -> int:
+    """
+    Calcula la distancia Hamming entre dos arrays binarios.
+    Devuelve el número de bits diferentes (distancia Hamming).
+    """
+    if a.shape != b.shape:
+        raise ValueError(f"Dimensiones diferentes: {a.shape} vs {b.shape}")
     return int((a != b).sum())
 
 def generate_pairs(data_b: dict[str, np.ndarray],
                    num_identities=4000,
                    num_impostor_pairs=100_000):
-    """Devuelve (genuinos, impostores) donde cada lista es [(emb1, emb2), ...]."""
+    """
+    Genera pares de muestras genuinas e impostoras.
+    Devuelve dos listas de pares (genuinos, impostores).
+    - genuinos: pares de muestras de la misma persona
+    - impostores: pares de muestras de diferentes personas
+    """
+    if num_identities <= 0:
+        raise ValueError(f"num_identities debe ser > 0, no {num_identities}")
+    if num_impostor_pairs <= 0:
+        raise ValueError(f"num_impostor_pairs debe ser > 0, no {num_impostor_pairs}")
+    if len(data_b) < num_identities:
+        raise ValueError(f"Dataset demasiado pequeño: {len(data_b)} < {num_identities}")
+    # Filtrar por número de muestras
+    # y eliminar duplicados
+
     # genuinos
     personas = [k for k,v in data_b.items() if v.shape[0] >= 2]
     random.shuffle(personas)
@@ -107,6 +168,11 @@ def generate_pairs(data_b: dict[str, np.ndarray],
     return genuinos, impostores
 
 def _calc_distances(pares: list[tuple[np.ndarray,np.ndarray]]) -> list[int]:
+    """
+    Calcula la distancia Hamming entre todos los pares de muestras.
+    Devuelve una lista de distancias Hamming.
+    """
+
     return [ _hamming(a,b) for a,b in pares ]
 
 # --------------------------------------------------
@@ -115,6 +181,13 @@ def _calc_distances(pares: list[tuple[np.ndarray,np.ndarray]]) -> list[int]:
 def evaluate_thresholds(dist_g: list[int],
                         dist_i: list[int],
                         ths: list[int]) -> tuple[list[float], list[float]]:
+    """
+    Calcula las tasas FAR y FRR para cada umbral.
+    Devuelve dos listas de tasas (FAR, FRR) en %.
+    - dist_g: lista de distancias genuinas
+    - dist_i: lista de distancias impostoras
+    - ths: lista de umbrales a evaluar
+    """
     total_g = len(dist_g)
     total_i = len(dist_i)
     fars, frrs = [], []
@@ -126,6 +199,13 @@ def evaluate_thresholds(dist_g: list[int],
 def find_eer(ths: list[int],
              fars: list[float],
              frrs: list[float]) -> tuple[int, float]:
+    """
+    Encuentra el umbral EER (Equal Error Rate) y su valor.
+    Devuelve el umbral y el valor EER.
+    - ths: lista de umbrales
+    - fars: lista de tasas FAR
+    - frrs: lista de tasas FRR
+    """
     best, eer, t_eer = float("inf"), 0.0, ths[0]
     for t,f,fr in zip(ths, fars, frrs):
         d = abs(f - fr)
